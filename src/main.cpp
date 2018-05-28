@@ -74,67 +74,13 @@ QHash<QByteArray, QByteArray> loadIdentityMapFile(const QString &fileName)
     return result;
 }
 
-QSet<int> loadRevisionsFile( const QString &fileName, Svn &svn )
-{
-    QRegExp revint("(\\d+)\\s*(?:-\\s*(\\d+|HEAD))?");
-    QSet<int> revisions;
-    if(fileName.isEmpty())
-        return revisions;
-
-    QFile file(fileName);
-    if( !file.open(QIODevice::ReadOnly)) {
-        fprintf(stderr, "Could not open file %s: %s\n", qPrintable(fileName), qPrintable(file.errorString()));
-        return revisions;
-    }
-
-    bool ok;
-    while(!file.atEnd()) {
-        QByteArray line = file.readLine().trimmed();
-        revint.indexIn(line);
-        if( revint.cap(2).isEmpty() ) {
-            int rev = revint.cap(1).toInt(&ok);
-            if(ok) {
-                revisions.insert(rev);
-            } else {
-                fprintf(stderr, "Unable to convert %s to int, skipping revision.\n", qPrintable(QString(line)));
-            }
-        } else if( revint.captureCount() == 2 ) {
-            int rev = revint.cap(1).toInt(&ok);
-            if(!ok) {
-                fprintf(stderr, "Unable to convert %s (%s) to int, skipping revisions.\n", qPrintable(revint.cap(1)), qPrintable(QString(line)));
-                continue;
-            }
-            int lastrev = 0;
-            if(revint.cap(2) == "HEAD") {
-                lastrev = svn.youngestRevision();
-                ok = true;
-            } else {
-                lastrev = revint.cap(2).toInt(&ok);
-            }
-            if(!ok) {
-                fprintf(stderr, "Unable to convert %s (%s) to int, skipping revisions.\n", qPrintable(revint.cap(2)), qPrintable(QString(line)));
-                continue;
-            }
-            for(; rev <= lastrev; ++rev )
-                revisions.insert(rev);
-        } else {
-            fprintf(stderr, "Unable to convert %s to int, skipping revision.\n", qPrintable(QString(line)));
-        }
-    }
-    file.close();
-    return revisions;
-}
-
 static const CommandLineOption options[] = {
     {"--identity-map FILENAME", "provide map between svn username and email"},
     {"--identity-domain DOMAIN", "provide user domain if no map was given"},
-    {"--revisions-file FILENAME", "provide a file with revision number that should be processed"},
     {"--rules FILENAME[,FILENAME]", "the rules file(s) that determines what goes where"},
     {"--msg-filter FILENAME", "External program / script to modify svn log message"},
     {"--add-metadata", "if passed, each git commit will have svn commit info"},
     {"--add-metadata-notes", "if passed, each git commit will have notes with svn commit info"},
-    {"--resume-from revision", "start importing at svn revision number"},
-    {"--max-rev revision", "stop importing at svn revision number"},
     {"--dry-run", "don't actually write anything"},
     {"--create-dump", "don't create the repository but a dump file suitable for piping into fast-import"},
     {"--debug-rules", "print what rule is being used for each file"},
@@ -195,58 +141,17 @@ int main(int argc, char **argv)
     RulesList rulesList(args->optionArgument(QLatin1String("rules")));
     rulesList.load();
 
-    int resume_from = args->optionArgument(QLatin1String("resume-from")).toInt();
-    int max_rev = args->optionArgument(QLatin1String("max-rev")).toInt();
-
     // create the repository list
     QHash<QString, Repository *> repositories;
 
-    int cutoff = resume_from ? resume_from : INT_MAX;
- retry:
-    int min_rev = 1;
     foreach (Rules::Repository rule, rulesList.allRepositories()) {
         Repository *repo = createRepository(rule, repositories);
         if (!repo)
             return EXIT_FAILURE;
         repositories.insert(rule.name, repo);
 
-        int repo_next = repo->setupIncremental(cutoff);
-
-        /*
-  * cutoff < resume_from => error exit eventually
-  * repo_next == cutoff => probably truncated log
-  */
-        if (cutoff < resume_from && repo_next == cutoff)
-            /*
-      * Restore the log file so we fail the next time
-      * svn2git is invoked with the same arguments
-      */
-            repo->restoreLog();
-
-        if (cutoff < min_rev)
-            /*
-      * We've rewound before the last revision of some
-      * repository that we've already seen.  Start over
-      * from the beginning.  (since cutoff is decreasing,
-      * we're sure we'll make forward progress eventually)
-      */
-            goto retry;
-
-        if (min_rev < repo_next)
-            min_rev = repo_next;
-    }
-
-    if (cutoff < resume_from) {
-        qCritical() << "Cannot resume from" << resume_from
-                    << "as there are errors in revision" << cutoff;
-        return EXIT_FAILURE;
-    }
-
-    if (min_rev < resume_from)
-        qDebug() << "skipping revisions" << min_rev << "to" << resume_from - 1 << "as requested";
-
-    if (resume_from)
-        min_rev = resume_from;
+        //repo->setupIncremental(INT_MAX);
+	}
 
     Svn::initialize();
     Svn svn(args->arguments().first());
@@ -259,26 +164,7 @@ int main(int argc, char **argv)
         domain = QString("localhost");
     svn.setIdentityDomain(domain);
 
-    if (max_rev < 1)
-        max_rev = svn.youngestRevision();
-
-    bool errors = false;
-    QSet<int> revisions = loadRevisionsFile(args->optionArgument(QLatin1String("revisions-file")), svn);
-    const bool filerRevisions = !revisions.isEmpty();
-    for (int i = min_rev; i <= max_rev; ++i) {
-        if(filerRevisions) {
-            if( !revisions.contains(i) ) {
-                printf(".");
-                continue;
-            } else {
-                printf("\n");
-            }
-        }
-        if (!svn.exportRevision(i)) {
-            errors = true;
-            break;
-        }
-    }
+    bool errors = svn.exportAll();
 
     foreach (Repository *repo, repositories) {
         repo->finalizeTags();

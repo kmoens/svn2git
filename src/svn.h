@@ -22,9 +22,12 @@
 #include <QList>
 #include "ruleparser.h"
 
-class Repository;
 
+class Repository;
 class SvnPrivate;
+
+typedef QList<SvnPrivate*> SvnPrivates;
+
 class Svn
 {
 public:
@@ -38,11 +41,10 @@ public:
     void setIdentityMap(const QHash<QByteArray, QByteArray> &identityMap);
     void setIdentityDomain(const QString &identityDomain);
 
-    int youngestRevision();
-    bool exportRevision(int revnum);
+    bool exportAll();
 
 private:
-    SvnPrivate * const d;
+    SvnPrivates privates;
 };
 
 #endif

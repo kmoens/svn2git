@@ -83,17 +83,22 @@ public:
 class SvnPrivate
 {
 public:
+    int currentRevision;
     QList<MatchRuleList> allMatchRules;
     RepositoryHash repositories;
     IdentityHash identities;
     QString userdomain;
+    QString path;
+    QString name;
 
     SvnPrivate(const QString &pathToRepository);
     ~SvnPrivate();
     int youngestRevision();
     int exportRevision(int revnum);
+    uint getEpochOfRevision(int revnum);
 
     int openRepository(const QString &pathToRepository);
+
 
 private:
     AprAutoPool global_pool;
@@ -115,48 +120,95 @@ void Svn::initialize()
 }
 
 Svn::Svn(const QString &pathToRepository)
-    : d(new SvnPrivate(pathToRepository))
 {
+    QStringList repositories = pathToRepository.split("|");
+    for (int i = 0; i < repositories.size(); ++i) {
+        privates.append(new SvnPrivate(repositories.at(i)));
+    }
 }
 
 Svn::~Svn()
 {
-    delete d;
+    for (int i = 0; i < privates.size(); ++i) {
+        delete privates.at(i);
+    }
 }
 
 void Svn::setMatchRules(const QList<MatchRuleList> &allMatchRules)
 {
-    d->allMatchRules = allMatchRules;
+    for (int i = 0; i < privates.size(); ++i) {
+        privates.at(i)->allMatchRules = allMatchRules;
+    }
 }
 
 void Svn::setRepositories(const RepositoryHash &repositories)
 {
-    d->repositories = repositories;
+    for (int i = 0; i < privates.size(); ++i) {
+        privates.at(i)->repositories = repositories;
+    }
 }
 
 void Svn::setIdentityMap(const IdentityHash &identityMap)
 {
-    d->identities = identityMap;
+    for (int i = 0; i < privates.size(); ++i) {
+        privates.at(i)->identities = identityMap;
+    }
 }
 
 void Svn::setIdentityDomain(const QString &identityDomain)
 {
-    d->userdomain = identityDomain;
+    for (int i = 0; i < privates.size(); ++i) {
+        privates.at(i)->userdomain = identityDomain;
+    }
 }
 
-int Svn::youngestRevision()
-{
-    return d->youngestRevision();
-}
+bool Svn::exportAll() {
+    // reset the current revision
+    qCritical() << "Exporting from " << privates.size() << " SVN repositories ...";
 
-bool Svn::exportRevision(int revnum)
-{
-    return d->exportRevision(revnum) == EXIT_SUCCESS;
+    for (int i = 0; i < privates.size(); ++i) {
+        SvnPrivate* svn = privates.at(i);
+        svn->currentRevision = 1;
+
+        qCritical() << svn->name << " has most recent revision " << svn->youngestRevision();
+    }
+    
+    // loop until done.
+    while (true) {
+        uint        oldestEpoch = UINT_MAX;
+        SvnPrivate* currentSvn = NULL;
+
+        for (int i = 0; i < privates.size(); ++i) {
+            SvnPrivate* svn = privates.at(i);
+            if (svn->currentRevision <= svn->youngestRevision()) {
+                uint currentEpoch = svn->getEpochOfRevision(svn->currentRevision);
+                if (currentEpoch < oldestEpoch) {
+                    currentSvn  = svn;
+                    oldestEpoch = currentEpoch;
+                }
+            }
+        }
+
+        if (!currentSvn) {
+            qCritical() << "All repositories are processed.";
+            return true;
+        }
+
+        int result = currentSvn->exportRevision(currentSvn->currentRevision);
+        if (result) {
+            qCritical() << "An error has occured, bailing out.";
+            return false;
+        }
+        currentSvn->currentRevision = currentSvn->currentRevision + 1;
+    }
+
 }
 
 SvnPrivate::SvnPrivate(const QString &pathToRepository)
-    : global_pool(NULL) , scratch_pool(NULL)
+    : global_pool(NULL) , scratch_pool(NULL), path(pathToRepository)
 {
+    name = path.section('/', -1);
+
     if( openRepository(pathToRepository) != EXIT_SUCCESS) {
         qCritical() << "Failed to open repository";
         exit(1);
@@ -446,6 +498,12 @@ private:
                        QString *repository_p, QString *effectiveRepository_p, QString *branch_p, QString *path_p);
 };
 
+uint SvnPrivate::getEpochOfRevision(int revnum) {
+    SvnRevision rev(revnum, fs, global_pool);
+    rev.fetchRevProps();
+    return rev.epoch;
+}
+
 int SvnPrivate::exportRevision(int revnum)
 {
     SvnRevision rev(revnum, fs, global_pool);
@@ -455,8 +513,7 @@ int SvnPrivate::exportRevision(int revnum)
     rev.userdomain = userdomain;
 
     // open this revision:
-    printf("Exporting revision %d ", revnum);
-    fflush(stdout);
+    qCritical() << "Exporting revision" << revnum << "from" << name;
 
     if (rev.open() == EXIT_FAILURE)
         return EXIT_FAILURE;
@@ -770,7 +827,6 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
     fflush(stdout);
 //                qDebug() << "   " << qPrintable(current) << "rev" << revnum << "->"
 //                         << qPrintable(repository) << qPrintable(branch) << qPrintable(path);
-
     if (change->change_kind == svn_fs_path_change_delete && current == svnprefix && path.isEmpty() && !repo->hasPrefix()) {
         if(ruledebug)
             qDebug() << "repository" << repository << "branch" << branch << "deleted";
