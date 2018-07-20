@@ -254,6 +254,8 @@ findMatchRule(const MatchRuleList &matchRules, int revnum, const QString &curren
             continue;
         if (it->maxRevision != -1 && it->maxRevision < revnum)
             continue;
+        if (it->ignoredRevisions.contains(revnum))
+            continue;
         if (it->action == Rules::Match::Ignore && ruleMask & NoIgnoreRule)
             continue;
         if (it->action == Rules::Match::Recurse && ruleMask & NoRecurseRule)
@@ -778,6 +780,7 @@ int SvnRevision::exportDispatch(const char *key, const svn_fs_path_change2_t *ch
     //  qDebug() << "rev" << revnum << qPrintable(current) << "matched rule:" << rule.lineNumber << "(" << rule.rx.pattern() << ")";
     switch (rule.action) {
     case Rules::Match::Ignore:
+    case Rules::Match::Excluded:
         //if(ruledebug)
         //    qDebug() << "  " << "ignoring.";
         return EXIT_SUCCESS;
@@ -790,6 +793,13 @@ int SvnRevision::exportDispatch(const char *key, const svn_fs_path_change2_t *ch
     case Rules::Match::Export:
         if(ruledebug)
             qDebug() << "rev" << revnum << qPrintable(current) << "matched rule:" << rule.info() << "  " << "exporting.";
+    
+        if (rule.ifCopy && path_from == NULL)  {
+            if (ruledebug)
+                qDebug() << "rev" << revnum << qPrintable(current) << "matched rule:" << rule.info() << "  " << "skipping, it is no copy operation.";
+            return EXIT_SUCCESS;
+        }
+
         if (exportInternal(key, change, path_from, rev_from, current, rule, matchRules) == EXIT_SUCCESS)
             return EXIT_SUCCESS;
         if (change->change_kind != svn_fs_path_change_delete) {
@@ -841,27 +851,34 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
         if (wasDir(fs, rev_from, path_from, pool.data())) {
             previous += '/';
         }
-        MatchRuleList::ConstIterator prevmatch =
-            findMatchRule(matchRules, rev_from, previous, NoIgnoreRule);
-        if (prevmatch != matchRules.constEnd()) {
+        MatchRuleList::ConstIterator prevmatch = findMatchRule(matchRules, rev_from, previous);
+        if (ruledebug)
+            qDebug() << "rev_from" << rev_from << qPrintable(previous) << "matched rule:" << prevmatch->info();
+
+        if (prevmatch->action == Rules::Match::Excluded) {
+            qWarning() << "WARN: SVN reports a \"copy from\" @" << revnum << "from" << path_from << "@" << rev_from << "but no matching rules found! Ignoring as defined by rules.";
+            path_from = NULL;
+        } else if (prevmatch != matchRules.constEnd()) {
             splitPathName(*prevmatch, previous, &prevsvnprefix, &prevrepository,
                           &preveffectiverepository, &prevbranch, &prevpath);
 
         } else {
-            qWarning() << "WARN: SVN reports a \"copy from\" @" << revnum << "from" << path_from << "@" << rev_from << "but no matching rules found! Ignoring copy, treating as a modification";
-            path_from = NULL;
+            qCritical() << "CRITICAL: SVN reports a \"copy from\" @" << revnum << "from" << path_from << "@" << rev_from << "but no matching rules found! If this original tag/branch is not part of the conversion,"
+                << "you should add a rule and set the action to 'excluded'.";
+            exit(1);
         }
     }
 
     // current == svnprefix => we're dealing with the contents of the whole branch here
     // CS: if the prefix matched the path, also treat it as a branch!
+
     if (path_from != NULL && current == svnprefix && (path.isEmpty() || path == rule.prefix)) {
         if (previous != prevsvnprefix) {
             // source is not the whole of its branch
-            qDebug() << qPrintable(current) << "is a partial branch of repository"
-                     << qPrintable(prevrepository) << "branch"
-                     << qPrintable(prevbranch) << "subdir"
-                     << qPrintable(prevpath);
+            qDebug() << qPrintable(current) << "is a partial branch of " << qPrintable(previous) 
+                     << " -- current prefix:" << qPrintable(svnprefix) << "- repository:" << qPrintable(repository) << "- branch:" << qPrintable(branch) << "- subdir:" << path
+                     << " -- prev    prefix:" << qPrintable(prevsvnprefix) << "- repository:" << qPrintable(prevrepository) << "- branch:" << qPrintable(prevbranch) << "- subdir: " << prevpath; 
+            exit(1);
         } else if (preveffectiverepository != effectiveRepository) {
             qWarning() << "WARN:" << qPrintable(current) << "rev" << revnum
                        << "is a cross-repository copy (from repository"
@@ -874,6 +891,7 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
                      << qPrintable(prevpath) << "to" << qPrintable(path);
             // FIXME: Handle with fast-import 'file rename' facility
             //        ??? Might need special handling when path == / or prevpath == /
+            return EXIT_SUCCESS;
         } else {
             if (prevbranch == branch) {
                 // same branch and same repository

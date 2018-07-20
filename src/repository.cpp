@@ -991,6 +991,11 @@ void FastImportRepository::Transaction::commit()
         qWarning() << "WARN: Branch" << branch << "in repository" << repository->name << "doesn't exist at revision"
                    << revnum << "-- did you resume from the wrong revision?";
         br.created = revnum;
+        // FIXME: to be removed
+        if (branch != "master") {
+            qCritical() << "CRITICAL: Only the 'master' branch will be automatically created. All other branches must be detected by merge points.";
+            exit(1);
+        }
     }
     br.commits.append(revnum);
     br.marks.append(mark);

@@ -134,12 +134,13 @@ void Rules::load(const QString &filename)
 
     QRegExp matchLine("match\\s+(.*)", Qt::CaseInsensitive);
     QRegExp matchActionLine("action\\s+(\\w+)", Qt::CaseInsensitive);
+    QRegExp matchIfLine("if\\s+(\\w+)", Qt::CaseInsensitive);
     QRegExp matchRepoLine("repository\\s+(\\S+)", Qt::CaseInsensitive);
     QRegExp matchDescLine("description\\s+(.+)$", Qt::CaseInsensitive);
     QRegExp matchRepoSubstLine("substitute repository\\s+(.+)$", Qt::CaseInsensitive);
     QRegExp matchBranchLine("branch\\s+(\\S+)", Qt::CaseInsensitive);
     QRegExp matchBranchSubstLine("substitute branch\\s+(.+)$", Qt::CaseInsensitive);
-    QRegExp matchRevLine("(min|max) revision (\\d+)", Qt::CaseInsensitive);
+    QRegExp matchRevLine("(min|max|ignore) revision (\\d+)", Qt::CaseInsensitive);
     QRegExp matchAnnotateLine("annotated\\s+(\\S+)", Qt::CaseInsensitive);
     QRegExp matchPrefixLine("prefix\\s+(.*)$", Qt::CaseInsensitive);
     QRegExp declareLine("declare\\s+("+varRegex+")\\s*=\\s*(\\S+)", Qt::CaseInsensitive);
@@ -254,6 +255,8 @@ void Rules::load(const QString &filename)
                 } else if (matchRevLine.exactMatch(line)) {
                     if (matchRevLine.cap(1) == "min")
                         match.minRevision = matchRevLine.cap(2).toInt();
+                    else if (matchRevLine.cap(1) == "ignore")
+                        match.ignoredRevisions.append(matchRevLine.cap(2).toInt());
                     else            // must be max
                         match.maxRevision = matchRevLine.cap(2).toInt();
                     continue;
@@ -261,6 +264,13 @@ void Rules::load(const QString &filename)
                     match.prefix = matchPrefixLine.cap(1);
                     if( match.prefix.startsWith('/'))
                         match.prefix = match.prefix.mid(1);
+                    continue;
+                } else if (matchIfLine.exactMatch(line)) {
+                    QString condition = matchIfLine.cap(1);
+                    if (condition == "copy") 
+                        match.ifCopy = true;
+                    else
+                        qFatal("Invalid condition \"%s\" on line %d", qPrintable(condition), lineNumber);
                     continue;
                 } else if (matchActionLine.exactMatch(line)) {
                     QString action = matchActionLine.cap(1);
@@ -270,6 +280,8 @@ void Rules::load(const QString &filename)
                         match.action = Match::Ignore;
                     else if (action == "recurse")
                         match.action = Match::Recurse;
+                    else if (action == "excluded")
+                        match.action = Match::Excluded;
                     else
                         qFatal("Invalid action \"%s\" on line %d", qPrintable(action), lineNumber);
                     continue;

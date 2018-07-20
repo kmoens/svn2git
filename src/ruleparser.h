@@ -72,17 +72,20 @@ public:
         QString branch;
         QList<Substitution> branch_substs;
         QString prefix;
+        QList<int> ignoredRevisions;
         int minRevision;
         int maxRevision;
         bool annotate;
+        bool ifCopy;
 
         enum Action {
             Ignore,
             Export,
-            Recurse
+            Recurse,
+            Excluded
         } action;
 
-        Match() : minRevision(-1), maxRevision(-1), annotate(false), action(Ignore) { }
+        Match() : minRevision(-1), maxRevision(-1), annotate(false), ifCopy(false), action(Ignore) { }
         bool operator<(const Match other) const {
             if (filename != other.filename)
                 return filename < other.filename;
